@@ -147,23 +147,23 @@ def train_vae(input_path: str,
 
         mu = torch.cat(all_mu, dim=0)
         logvar = torch.cat(all_logvar, dim=0)
-        std = torch.exp(0.5 * logvar)
+        std = torch.sqrt(torch.exp(logvar)) # sigma
 
         index = df.index if df is not None else None
 
-        mu_df = pd.DataFrame(mu.numpy(), index=index, columns=[f"mu_{i}" for i in range(mu.shape[1])]) # Does not like dataset.index or df.index. 
-        std_df = pd.DataFrame(std.numpy(), index=index, columns=[f"std_{i}" for i in range(std.shape[1])])
+        mu_df = pd.DataFrame(mu.numpy(), index=index, columns=[f"mu_{i}" for i in range(mu.shape[1])]) # mu 
+        std_df = pd.DataFrame(std.numpy(), index=index, columns=[f"std_{i}" for i in range(std.shape[1])]) # sigma
         latent_stats_df = pd.concat([mu_df, std_df], axis=1)
 
-        latent_path = f"{out}_kc_exploratory_stats.tsv"
+        latent_path = f"{out}.latent_stats.tsv"
         latent_stats_df.to_csv(latent_path, sep="\t")
         click.echo(f"Latent stats saved, to {latent_path}")
 
-        # Keep Below This Line For Actual Stats. Above is Exploratory
+        # Keep Below This Line For Actual Stats. Above is Exploratory for KC
         if df is not None:
-            feature_stats = pd.DataFrame({
-                "mean": df.mean(),
-                "std": df.std(ddof=0)}, index=df.columns)
+                    stats = pd.DataFrame({
+                        "mean": df.mean(),
+                        "std": df.std(ddof=0)})
             
         else:
             all_batches = []
@@ -172,15 +172,13 @@ def train_vae(input_path: str,
                     x_tensor = batch[0] if isinstance(batch, (tuple, list)) else batch
                     all_batches.append(x_tensor.cpu())
                 all_data = torch.cat(all_batches, dim=0).numpy()
-                feature_stats = pd.DataFrame({
+                stats = pd.DataFrame({
                     "mean": np.mean(all_data, axis=0),
-                    "std": np.std(all_data, axis=0, ddof=0)}, index=features)
+                    "std": np.std(all_data, axis=0, ddof=0)})
         
-        feature_stats_path = f"{out}_feature_stats.tsv"
-        feature_stats.to_csv(feature_stats_path, sep="\t")
-        click.echo(f"Feature stats saved, to {feature_stats_path}")
-    ###
-
+        stats_path = f"{out}.stats.tsv"
+        stats.to_csv(stats_path, sep="\t")
+        click.echo(f"Stats saved, to {stats_path}")
 
 @model.command()
 @click.argument("input_path", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str))
