@@ -1,6 +1,7 @@
 
 import click
 import pandas as pd
+import numpy as np
 
 from sklearn.preprocessing import MinMaxScaler
 
@@ -131,6 +132,65 @@ def train_vae(input_path: str,
 
     save(vae, out)
     click.echo(f"Model saved, to {out}")
+
+    if save_stats:
+        losses_df = pd.DataFrame({
+            "epoch": range(1, len(vae.history["loss"]) + 1),
+            "loss": vae.history["loss"],
+            "recon": vae.history["recon"],
+            "kl": vae.history["kl"],
+        })
+        losses_df.to_csv(f"{out}.losses_stats.tsv", sep="\t", index=False)
+        click.echo(f"Training losses saved to {out}.losses_stats.tsv")
+
+        exportloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        all_mu = []
+        all_logvar = []
+
+        with torch.no_grad():
+            for batch in exportloader:
+                    x_tensor = batch[0] if isinstance(batch, (tuple, list)) else batch
+                    x_tensor = x_tensor.to(device).float()
+                    _, mu, logvar, z = vae(x_tensor)
+                    all_mu.append(mu.cpu())
+                    all_logvar.append(logvar.cpu())
+
+        mu = torch.cat(all_mu, dim=0)
+        logvar = torch.cat(all_logvar, dim=0)
+        std = torch.sqrt(torch.exp(logvar)) # sigma
+
+        index = df.index if df is not None else None
+
+        mu_df = pd.DataFrame(mu.numpy(), index=index, columns=[f"mu_{i}" for i in range(mu.shape[1])])
+        std_df = pd.DataFrame(std.numpy(), index=index, columns=[f"std_{i}" for i in range(std.shape[1])])
+
+        mu_path = f"{out}.latent_mu.tsv"
+        std_path = f"{out}.latent_std.tsv"
+        mu_df.to_csv(mu_path, sep="\t")
+        std_df.to_csv(std_path, sep="\t")
+        click.echo(f"Latent mu saved to {mu_path}")
+        click.echo(f"Latent std (sigma) saved to {std_path}")
+
+        # Standard Stats
+        if df is not None:
+            stats = pd.DataFrame({
+                "mean": df.mean(),
+                "std": df.std(ddof=0)})
+            
+        else:
+            all_batches = []
+            with torch.no_grad():
+                for batch in exportloader:
+                    x_tensor = batch[0] if isinstance(batch, (tuple, list)) else batch
+                    all_batches.append(x_tensor.cpu())
+                all_data = torch.cat(all_batches, dim=0).numpy()
+                stats = pd.DataFrame({
+                    "mean": np.mean(all_data, axis=0),
+                    "std": np.std(all_data, axis=0, ddof=0)})
+        
+        stats_path = f"{out}.stats.tsv"
+        stats.to_csv(stats_path, sep="\t")
+        click.echo(f"Stats saved, to {stats_path}")
 
 
 @model.command()
