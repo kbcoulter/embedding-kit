@@ -39,6 +39,7 @@ model = click.Group(name="model", help="VAE Model commands.")
 @click.option("--zero-mask", default=None, type=float)
 @click.option("--seed", default=42, type=int)
 @click.option("--bfloat16", is_flag=True)
+@click.option("--sampling/--no-sampling", default=True, show_default=True, help="Enable reparameterization sampling during training (VAE). Use --no-sampling for a standard autoencoder.")
 def train_vae(input_path: str,
               group: str,
               latent: int,
@@ -53,7 +54,8 @@ def train_vae(input_path: str,
               zero_mask: float,
               save_stats: bool,
               seed: int,
-              bfloat16: bool
+              bfloat16: bool,
+              sampling: bool
               ):
     """
     Train VAE model from a TSV file.
@@ -111,6 +113,7 @@ def train_vae(input_path: str,
               latent_dim=latent,
               encoder_layers=enc_layers_list,
               decoder_layers=dec_layers_list,
+              sampling=sampling,
               device=device, dtype=dtype)
 
     loss_func = bce_with_logits
@@ -130,9 +133,18 @@ def train_vae(input_path: str,
     save(vae, out)
     click.echo(f"Model saved, to {out}")
 
-    vae.eval()
-
     if save_stats: ### KC
+        vae.eval()
+        losses_df = pd.DataFrame({
+            "epoch": range(1, len(vae.history["loss"]) + 1),
+            "loss": vae.history["loss"],
+            "recon": vae.history["recon"],
+            "kl": vae.history["kl"],
+        })
+        losses_df.to_csv(f"{out}.losses_stats.tsv", sep="\t", index=False)
+        click.echo(f"Training losses saved to {out}.losses_stats.tsv")
+
+        
         exportloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         all_mu = []
         all_logvar = []
@@ -151,19 +163,21 @@ def train_vae(input_path: str,
 
         index = df.index if df is not None else None
 
-        mu_df = pd.DataFrame(mu.numpy(), index=index, columns=[f"mu_{i}" for i in range(mu.shape[1])]) # mu 
-        std_df = pd.DataFrame(std.numpy(), index=index, columns=[f"std_{i}" for i in range(std.shape[1])]) # sigma
-        latent_stats_df = pd.concat([mu_df, std_df], axis=1)
+        mu_df = pd.DataFrame(mu.numpy(), index=index, columns=[f"mu_{i}" for i in range(mu.shape[1])])
+        std_df = pd.DataFrame(std.numpy(), index=index, columns=[f"std_{i}" for i in range(std.shape[1])])
 
-        latent_path = f"{out}.latent_stats.tsv"
-        latent_stats_df.to_csv(latent_path, sep="\t")
-        click.echo(f"Latent stats saved, to {latent_path}")
+        mu_path = f"{out}.latent_mu.tsv"
+        std_path = f"{out}.latent_std.tsv"
+        mu_df.to_csv(mu_path, sep="\t")
+        std_df.to_csv(std_path, sep="\t")
+        click.echo(f"Latent mu saved to {mu_path}")
+        click.echo(f"Latent std (sigma) saved to {std_path}")
 
-        # Keep Below This Line For Actual Stats. Above is Exploratory for KC
+        # Standard Stats
         if df is not None:
-                    stats = pd.DataFrame({
-                        "mean": df.mean(),
-                        "std": df.std(ddof=0)})
+            stats = pd.DataFrame({
+                "mean": df.mean(),
+                "std": df.std(ddof=0)})
             
         else:
             all_batches = []
@@ -179,6 +193,7 @@ def train_vae(input_path: str,
         stats_path = f"{out}.stats.tsv"
         stats.to_csv(stats_path, sep="\t")
         click.echo(f"Stats saved, to {stats_path}")
+
 
 @model.command()
 @click.argument("input_path", type=click.Path(exists=True, dir_okay=False, readable=True, path_type=str))
@@ -278,6 +293,6 @@ def encode(input_path: str, model_path:str, normalize:str, out:str):
     m.to(get_device())
     result = m.encoder(df_tensor)
     
-    martix = result[2].detach().cpu().numpy()
-    out_df = pd.DataFrame(martix, index=df.index)
+    matrix = result[0].detach().cpu().numpy()
+    out_df = pd.DataFrame(matrix, index=df.index)
     out_df.to_csv(out, sep="\t")
