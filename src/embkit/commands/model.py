@@ -133,7 +133,8 @@ def train_vae(input_path: str,
     save(vae, out)
     click.echo(f"Model saved, to {out}")
 
-    if save_stats:
+    if save_stats: ### KC
+        vae.eval()
         losses_df = pd.DataFrame({
             "epoch": range(1, len(vae.history["loss"]) + 1),
             "loss": vae.history["loss"],
@@ -143,6 +144,7 @@ def train_vae(input_path: str,
         losses_df.to_csv(f"{out}.losses_stats.tsv", sep="\t", index=False)
         click.echo(f"Training losses saved to {out}.losses_stats.tsv")
 
+        
         exportloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         all_mu = []
         all_logvar = []
@@ -151,7 +153,7 @@ def train_vae(input_path: str,
             for batch in exportloader:
                     x_tensor = batch[0] if isinstance(batch, (tuple, list)) else batch
                     x_tensor = x_tensor.to(device).float()
-                    _, mu, logvar, z = vae(x_tensor)
+                    _, mu, logvar, _ = vae(x_tensor)
                     all_mu.append(mu.cpu())
                     all_logvar.append(logvar.cpu())
 
