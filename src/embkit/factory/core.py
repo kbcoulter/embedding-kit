@@ -49,7 +49,7 @@ def load(path, device=None, dtype=None):
     """Load a serialized model from ``path`` and optionally move its tensors."""
 
     def patch_legacy_linear():
-        '''Check for final linear layer expected in legacy loading.'''
+        '''Check for final linear layer expected in legacy loading and patch if present.'''
         encoder = getattr(model, "encoder", None)
         if encoder is None:
             return False
