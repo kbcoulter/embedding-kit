@@ -15,7 +15,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset, Dataset
 from tqdm.autonotebook import tqdm
 import numpy as np
-from ..losses import net_vae_loss
+from ..losses import net_vae_loss, VAELoss, BCEWithLogitsVAELoss, MSEVAELoss
 
 from .. import get_device, dataframe_loader
 
@@ -249,7 +249,7 @@ def fit(model, X: Union[torch.Tensor, Dataset, DataLoader],
 
 
 def fit_vae(model, 
-            X: Union[pd.DataFrame, torch.Tensor, torch.utils.data.DataLoader], 
+            X: Union[pd.DataFrame, torch.Tensor, Dataset, DataLoader], 
             epochs: int = 20, 
             lr: Optional[float] = 1e-3,
             beta: float = 1.0,
@@ -271,41 +271,49 @@ def fit_vae(model,
     """
 
     if loss is None:
-        raise ValueError("loss function is required (e.g., from embkit.losses.vae_loss)")
+        criterion = MSEVAELoss()
+    else:
+        criterion = loss
 
     # --- setup ---
-    if lr is None:
-        lr = model.lr
     if device is None:
         device = get_device()
 
     if beta_schedule is not None:
         logger.info("Using beta_schedule: %s", beta_schedule)
 
+    """
     # Column alignment safety check if a DataFrame is passed
-    if hasattr(X, "columns") and model.features is not None:
+    if hasattr(X, "columns") and hasattr(model, "features"):
         if list(X.columns) != list(model.features):
             raise ValueError(
                 "Input DataFrame columns do not match model features.\n"
                 f"Data columns: {list(X.columns)[:5]}... (n={len(X.columns)})\n"
                 f"Model features: {model.features[:5]}... (n={len(model.features)})"
             )
+    """
 
     model.to(device)
     # Ensure biological masks are strictly enforced before training starts
     if hasattr(model, "refresh_masks"):
         model.refresh_masks(device)
     model.train()
+    try:
+        model_dtype = next(model.parameters()).dtype
+    except StopIteration:
+        model_dtype = None
 
     # Build dataloader once
     if isinstance(X, pd.DataFrame):
         data_loader = dataframe_loader(X, batch_size=batch_size, shuffle=shuffle, device=device)
     elif isinstance(X, torch.Tensor):
         data_loader = DataLoader(TensorDataset(X), batch_size=batch_size, shuffle=shuffle)
+    elif isinstance(X, Dataset):
+        data_loader = DataLoader(X, batch_size=batch_size, shuffle=shuffle)
     elif isinstance(X, DataLoader):
         data_loader = X
     else:
-        raise TypeError("X must be DataFrame, Tensor, or DataLoader")
+        raise TypeError("X must be DataFrame, Tensor, Dataset, or DataLoader")
 
     opt = _resolve_optimizer(model=model, lr=lr, optimizer=optimizer)
 
@@ -319,10 +327,18 @@ def fit_vae(model,
 
     def vae_step(batch, beta_value: float) -> Dict[str, torch.Tensor]:
         (x_tensor,) = batch
-        x_tensor = x_tensor.to(device).float()
+        if model_dtype is None:
+            x_tensor = x_tensor.to(device)
+        else:
+            x_tensor = x_tensor.to(device=device, dtype=model_dtype)
 
-        recon, mu, logvar, _ = model(x_tensor)
-        total_loss, recon_loss, kl_loss = loss(recon, x_tensor, mu, logvar, beta=beta_value)
+        res = model(x_tensor)
+
+        # nn.Module-based loss: update beta state then call forward
+        if beta_value is not None:
+            criterion.beta = beta_value
+
+        total_loss, recon_loss, kl_loss = criterion(res.recon, x_tensor, res.mu, res.logvar)
 
         return {
             "loss": total_loss,
@@ -330,7 +346,7 @@ def fit_vae(model,
             "kl": kl_loss,
         }
 
-    return _run_training_phases(
+    _run_training_phases(
         model=model,
         loader=data_loader,
         optimizer=opt,
@@ -340,6 +356,8 @@ def fit_vae(model,
         progress=progress,
         accumulate_steps=accumulate_steps,
     )
+
+    return history
 
 
 def fit_net_vae(
@@ -441,6 +459,8 @@ def fit_net_vae(
 
     total_epochs = sum(phases) if phases else epochs
     boundaries = np.cumsum(phases).tolist() if phases else []
+    # Allocate loss once — NetVAE decoder outputs raw logits
+    _loss_fn = BCEWithLogitsVAELoss(beta=1.0)
 
     for epoch in range(total_epochs):
         if boundaries and epoch in boundaries:
@@ -456,7 +476,9 @@ def fit_net_vae(
 
         for (batch_x,) in data_loader:
             optimizer.zero_grad()
-            total_loss, recon_loss, kl_loss = net_vae_loss(model, batch_x)
+            mu, logvar, z = model.encoder(batch_x)
+            reconstruction = model.decoder(z)
+            total_loss, recon_loss, kl_loss = _loss_fn(reconstruction, batch_x, mu, logvar)
             total_loss.backward()
             optimizer.step()
             epoch_tot += float(total_loss.item())

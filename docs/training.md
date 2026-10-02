@@ -10,13 +10,13 @@ This page covers everything you need to know about training VAE models with Embe
 from embkit import dataframe_loader
 from embkit.models.vae import VAE
 from embkit.factory.layers import Layer
-from embkit.losses import bce_with_logits
+from embkit.losses import BCEWithLogitsVAELoss
 from embkit import optimize
 
 dataloader = dataframe_loader(df_norm, batch_size=256)
 
 vae = VAE(features=list(df_norm.columns), latent_dim=128)
-optimize.fit_vae(vae, X=dataloader, epochs=50, lr=1e-3, loss=bce_with_logits)
+optimize.fit_vae(vae, X=dataloader, epochs=50, lr=1e-3, loss=BCEWithLogitsVAELoss())
 ```
 
 ---
@@ -31,7 +31,7 @@ optimize.fit_vae(
     lr=1e-3,
     beta=1.0,
     beta_schedule=None,    # list of (beta, n_epochs) pairs
-    loss=None,             # required: loss function from embkit.losses
+    loss=None,             # optional: loss module from embkit.losses; defaults to MSEVAELoss()
     optimizer=None,        # optional: custom torch.optim.Optimizer
     device=None,           # auto-detected if None
     progress=True,
@@ -49,31 +49,33 @@ optimize.fit_vae(
 | `torch.Tensor` | wrapped in `TensorDataset` then `DataLoader` |
 | `DataLoader` | used directly |
 
-`loss` is **required**. Pass one of the functions from `embkit.losses`.
+`loss` is optional. When `None`, `fit_vae` defaults to `MSEVAELoss()`. Pass one of the VAE loss modules from `embkit.losses` (e.g., `BCEWithLogitsVAELoss()`) to override.
 
 ### Returned value
 
-`fit_vae` returns the final batch loss as a float. Training history is stored on the model at `model.history`.
+`fit_vae` returns the training `history` — a dict of per-epoch means. The same history is also stored on the model at `model.history`.
 
 ---
 
 ## Loss functions
 
-All loss functions have the signature:
+All VAE loss modules share the call signature:
 
 ```python
-def loss_fn(recon, x, mu, logvar, beta=1.0) -> (total, recon_loss, kl_loss)
+loss_fn(recon, x, mu, logvar) -> (total, recon_loss, kl_loss)
 ```
 
-| Function | When to use |
+| Module | When to use |
 |----------|-------------|
-| `bce_with_logits` | Decoder outputs raw logits (no final activation). Most stable. Default for `train-vae` CLI. |
-| `bce` | Decoder outputs values in (0, 1) via sigmoid. Use when `final_activation="sigmoid"`. |
-| `mse` | Continuous targets that aren't bounded to [0, 1]. Use with un-normalized data. |
+| `BCEWithLogitsVAELoss` | Decoder outputs raw logits (no final activation). Most stable. Default for `train-vae` CLI. |
+| `BCEVAELoss` | Decoder outputs values in (0, 1) via sigmoid. Use when `final_activation="sigmoid"`. |
+| `MSEVAELoss` | Continuous targets that aren't bounded to [0, 1]. Use with un-normalized data. |
 
 ```python
-from embkit.losses import bce_with_logits, bce, mse
+from embkit.losses import BCEWithLogitsVAELoss, BCEVAELoss, MSEVAELoss
 ```
+
+`get_vae_loss("mse" | "bce" | "bce-logit")` is also available for string-based dispatch.
 
 ---
 
@@ -93,7 +95,7 @@ schedule = [
     (0.4,  40),   # final 40 epochs: β = 0.4
 ]
 
-optimize.fit_vae(vae, X=loader, beta_schedule=schedule, loss=bce_with_logits)
+optimize.fit_vae(vae, X=loader, beta_schedule=schedule, loss=BCEWithLogitsVAELoss())
 ```
 
 Total epochs = sum of all `n_epochs` values. The `epochs` argument is ignored when `beta_schedule` is provided.
